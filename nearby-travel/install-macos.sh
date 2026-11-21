@@ -8,8 +8,8 @@ fail() {
 
 [[ $# -eq 0 ]] || fail '用法：bash install-macos.sh'
 [[ "$(uname -s)" == Darwin ]] || fail '请在 macOS 上运行此脚本。'
-for program in git node npm; do
-  command -v "$program" >/dev/null || fail "请先安装 ${program}。Node.js 要求 22.9 或更新版本。"
+for program in git node npm python3; do
+  command -v "$program" >/dev/null || fail "请先安装 ${program}。"
 done
 node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || major === 22 && minor >= 9 ? 0 : 1)' ||
   fail '请先安装 Node.js 22.9 或更新版本。'
@@ -28,10 +28,8 @@ fi
 
 package_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 amap_patch="$package_dir/patches/foodnearby.patch"
-dp_login_patch="$package_dir/patches/dianping-login.patch"
-dp_rating_patch="$package_dir/patches/dianping-rating.patch"
 skill_file="$package_dir/SKILL.md"
-[[ -f "$amap_patch" && -f "$dp_login_patch" && -f "$dp_rating_patch" && -f "$skill_file" ]] ||
+[[ -f "$amap_patch" && -f "$skill_file" && -f "$package_dir/scripts/stations.py" && -f "$package_dir/data/12306-stations.json" && -f "$package_dir/data/verified-cities.json" ]] ||
   fail '请完整解压 ZIP 后再运行。'
 
 mkdir -p "${CODEX_HOME:-$HOME/.codex}"
@@ -39,7 +37,6 @@ CODEX_HOME=$(cd "${CODEX_HOME:-$HOME/.codex}" && pwd -P)
 export CODEX_HOME
 managed="$CODEX_HOME/mcp-servers/nearby-travel"
 amap="$managed/foodnearby"
-dp="$managed/dianping"
 key_file="$amap/.env"
 skill_dir="$CODEX_HOME/skills/nearby-travel"
 lock="$CODEX_HOME/.nearby-travel-install-lock"
@@ -54,16 +51,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 amap_revision=2f4de0c02352d362343d45c88a27b2f3b2601544
-dp_revision=7886cc2996ad207e69b5277d83b6d28a422140e7
 amap_receipt="$amap_revision $(git hash-object "$amap_patch")"
-previous_dp_receipt="$dp_revision $(git hash-object "$dp_login_patch")"
-dp_receipt="$previous_dp_receipt $(git hash-object "$dp_rating_patch")"
 
 check_mcp() {
   local name=$1 entry=$2 output args_value
   if output=$("$codex_bin" mcp get "$name" --json 2>&1); then
-    args_value=
-    if [[ "$name" == nearby-amap ]]; then args_value="$key_file"; fi
+    args_value="$key_file"
     printf '%s' "$output" | "$node_bin" -e '
       const fs = require("node:fs");
       const [command, entry, keyFile] = process.argv.slice(1);
@@ -98,9 +91,7 @@ check_install() {
 }
 
 amap_config=$(check_mcp nearby-amap "$amap/dist/index.js")
-dp_config=$(check_mcp nearby-dianping "$dp/dist/index.js")
 check_install "$amap" "$amap_receipt" >/dev/null
-installed_dp=$(check_install "$dp" "$dp_receipt" "$previous_dp_receipt")
 upgrade_skill=false
 if [[ -e "$skill_dir" || -L "$skill_dir" ]]; then
   [[ ! -L "$skill_dir" && ! -L "$skill_dir/SKILL.md" && -f "$skill_dir/SKILL.md" ]] ||
@@ -108,7 +99,7 @@ if [[ -e "$skill_dir" || -L "$skill_dir" ]]; then
   if ! cmp -s "$skill_file" "$skill_dir/SKILL.md"; then
     installed_skill_hash=$(shasum -a 256 < "$skill_dir/SKILL.md")
     case "${installed_skill_hash%% *}" in
-      72ef028df668215eaf47acfa60823ef017c9a1fba240c157f02aa7f14db4265f|bb31c37ac0e8e4c28ced4286f32698626fb00d2d2db1543bf9c75cd19bc7fc04|a0109ebf1684244f136a5565ab1679b9444574efc6d3552f49246556c1225893|c9c8ca812d18e7b9645375f9afa9f7dec2b80c5aeaf5eb7a3146a263e52d9626|806694cbe9113d19c6254776ba7e0a856919f9cc24b5fdcf82cf986d6b1a37f7)
+      72ef028df668215eaf47acfa60823ef017c9a1fba240c157f02aa7f14db4265f|bb31c37ac0e8e4c28ced4286f32698626fb00d2d2db1543bf9c75cd19bc7fc04|a0109ebf1684244f136a5565ab1679b9444574efc6d3552f49246556c1225893|c9c8ca812d18e7b9645375f9afa9f7dec2b80c5aeaf5eb7a3146a263e52d9626|806694cbe9113d19c6254776ba7e0a856919f9cc24b5fdcf82cf986d6b1a37f7|fbf0f2c03557c7bf387f26de4ea992aefc100e5193eee4484911f9c735804fca)
         upgrade_skill=true ;;
       *) fail "已有不同的 Skill 位于 ${skill_dir}。";;
     esac
@@ -133,19 +124,7 @@ build_server() {
 if [[ ! -d "$amap" ]]; then
   build_server "$staging/foodnearby" https://github.com/FunEnn/FoodNearBy-MCP.git "$amap_revision" "$amap_receipt" "$amap_patch"
 fi
-if [[ ! -d "$dp" ]]; then
-  build_server "$staging/dianping" https://github.com/qianwj/dp-mcp.git "$dp_revision" "$dp_receipt" "$dp_login_patch" "$dp_rating_patch"
-elif [[ "$installed_dp" == "$previous_dp_receipt" ]]; then
-  [[ "$(git -C "$dp" rev-parse HEAD)" == "$dp_revision" ]] || fail '大众点评的本机源码版本已更改。'
-  if ! git -C "$dp" apply --reverse --check "$dp_rating_patch" 2>/dev/null; then
-    git -C "$dp" apply "$dp_rating_patch" || fail '大众点评的本机代码与评分补丁冲突。'
-  fi
-  (cd "$dp" && npm run build)
-  printf '%s\n' "$dp_receipt" > "$staging/dp-receipt"
-  mv "$staging/dp-receipt" "$dp/.nearby-travel-release"
-fi
 if [[ -d "$staging/foodnearby" ]]; then mv "$staging/foodnearby" "$amap"; fi
-if [[ -d "$staging/dianping" ]]; then mv "$staging/dianping" "$dp"; fi
 if [[ ! -e "$key_file" && ! -L "$key_file" ]]; then
   (umask 077; set -o noclobber; printf 'AMAP_API_KEY=\n' > "$key_file")
 fi
@@ -154,20 +133,23 @@ if [[ "$amap_config" == missing ]]; then
   "$codex_bin" mcp add nearby-amap --env "DOTENV_CONFIG_PATH=$key_file" --env DOTENV_CONFIG_QUIET=true -- \
     "$node_bin" "--env-file-if-exists=$key_file" "$amap/dist/index.js"
 fi
-if [[ "$dp_config" == missing ]]; then
-  "$codex_bin" mcp add nearby-dianping -- "$node_bin" "$dp/dist/index.js"
-fi
 if [[ ! -d "$skill_dir" ]]; then
   mkdir "$staging/skill"
   cp "$skill_file" "$staging/skill/SKILL.md"
+  cp -R "$package_dir/scripts" "$package_dir/data" "$staging/skill/"
   mv "$staging/skill" "$skill_dir"
 elif [[ "$upgrade_skill" == true ]]; then
   cp "$skill_file" "$staging/SKILL.md"
   mv "$staging/SKILL.md" "$skill_dir/SKILL.md"
 fi
+if [[ -d "$skill_dir" ]]; then
+  [[ ! -L "$skill_dir/scripts" && ! -L "$skill_dir/data" ]] || fail '已有链接形式的脚本或数据目录，请检查 Skill。'
+  mkdir -p "$skill_dir/scripts" "$skill_dir/data"
+  cp "$package_dir/scripts/stations.py" "$skill_dir/scripts/stations.py"
+  cp "$package_dir/data/12306-stations.json" "$skill_dir/data/12306-stations.json"
+  cp "$package_dir/data/verified-cities.json" "$skill_dir/data/verified-cities.json"
+fi
 
-printf '\n已安装 nearby-travel。首次使用请完成这两步，然后重开 Codex。\n'
+printf '\n已安装 nearby-travel。首次使用请配置高德 Key，然后重开 Codex。\n'
 printf '1. 在终端运行下列命令，在本机文件中填写自己的高德 Web 服务 Key。\n'
 printf '   open -e %q\n' "$key_file"
-printf '2. 退出正在使用大众点评的 Codex 会话，再运行下列命令。在打开的浏览器中登录，完成网站要求的验证，回终端按 Ctrl+C。\n'
-printf '   %q %q\n' "$node_bin" "$dp/dist/login.js"
