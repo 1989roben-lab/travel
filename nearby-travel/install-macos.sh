@@ -28,9 +28,11 @@ fi
 
 package_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 amap_patch="$package_dir/patches/foodnearby.patch"
-dp_patch="$package_dir/patches/dianping-login.patch"
+dp_login_patch="$package_dir/patches/dianping-login.patch"
+dp_rating_patch="$package_dir/patches/dianping-rating.patch"
 skill_file="$package_dir/SKILL.md"
-[[ -f "$amap_patch" && -f "$dp_patch" && -f "$skill_file" ]] || fail '请完整解压 ZIP 后再运行。'
+[[ -f "$amap_patch" && -f "$dp_login_patch" && -f "$dp_rating_patch" && -f "$skill_file" ]] ||
+  fail '请完整解压 ZIP 后再运行。'
 
 mkdir -p "${CODEX_HOME:-$HOME/.codex}"
 CODEX_HOME=$(cd "${CODEX_HOME:-$HOME/.codex}" && pwd -P)
@@ -54,7 +56,9 @@ trap 'exit 143' TERM
 amap_revision=2f4de0c02352d362343d45c88a27b2f3b2601544
 dp_revision=7886cc2996ad207e69b5277d83b6d28a422140e7
 amap_receipt="$amap_revision $(git hash-object "$amap_patch")"
-dp_receipt="$dp_revision $(git hash-object "$dp_patch")"
+previous_dp_receipt="$dp_revision $(git hash-object "$dp_login_patch")"
+dp_receipt="$previous_dp_receipt $(git hash-object "$dp_rating_patch")"
+previous_skill_hash=72ef028df668215eaf47acfa60823ef017c9a1fba240c157f02aa7f14db4265f
 
 check_mcp() {
   local name=$1 entry=$2 output args_value
@@ -83,35 +87,43 @@ check_mcp() {
 }
 
 check_install() {
-  local dir=$1 expected=$2
+  local dir=$1 expected=$2 previous=${3:-$2} receipt
   if [[ -e "$dir" || -L "$dir" ]]; then
-    [[ ! -L "$dir" && -f "$dir/.nearby-travel-release" && -f "$dir/dist/index.js" &&
-      "$(cat "$dir/.nearby-travel-release")" == "$expected" ]] ||
+    [[ ! -L "$dir" && -f "$dir/.nearby-travel-release" && -f "$dir/dist/index.js" ]] ||
       fail "发现已有目录 ${dir}，版本或构建与此安装包不匹配。"
+    receipt=$(cat "$dir/.nearby-travel-release")
+    [[ "$receipt" == "$expected" || "$receipt" == "$previous" ]] ||
+      fail "发现已有目录 ${dir}，版本或构建与此安装包不匹配。"
+    printf '%s' "$receipt"
   fi
 }
 
 amap_config=$(check_mcp nearby-amap "$amap/dist/index.js")
 dp_config=$(check_mcp nearby-dianping "$dp/dist/index.js")
-check_install "$amap" "$amap_receipt"
-check_install "$dp" "$dp_receipt"
+check_install "$amap" "$amap_receipt" >/dev/null
+installed_dp=$(check_install "$dp" "$dp_receipt" "$previous_dp_receipt")
+upgrade_skill=false
 if [[ -e "$skill_dir" || -L "$skill_dir" ]]; then
-  [[ ! -L "$skill_dir" && -f "$skill_dir/SKILL.md" ]] &&
-    cmp -s "$skill_file" "$skill_dir/SKILL.md" ||
+  [[ ! -L "$skill_dir" && ! -L "$skill_dir/SKILL.md" && -f "$skill_dir/SKILL.md" ]] ||
     fail "已有不同的 Skill 位于 ${skill_dir}。"
+  if ! cmp -s "$skill_file" "$skill_dir/SKILL.md"; then
+    [[ "$(shasum -a 256 < "$skill_dir/SKILL.md")" == "$previous_skill_hash "* ]] ||
+      fail "已有不同的 Skill 位于 ${skill_dir}。"
+    upgrade_skill=true
+  fi
 fi
 
 mkdir -p "$managed" "$CODEX_HOME/skills"
 staging=$(mktemp -d "$managed/.install.XXXXXX")
 build_server() {
-  local target=$1 repo=$2 revision=$3 receipt=$4 patch_file=$5
+  local target=$1 repo=$2 revision=$3 receipt=$4 patch_file
+  shift 4
   git init -q "$target"
   git -C "$target" remote add origin "$repo"
   git -C "$target" fetch --quiet --depth 1 origin "$revision"
   git -C "$target" checkout --quiet --detach FETCH_HEAD
   [[ "$(git -C "$target" rev-parse HEAD)" == "$revision" ]] || fail '下载的 Git 提交与指定版本不符。'
-  git -C "$target" apply --check "$patch_file"
-  git -C "$target" apply "$patch_file"
+  for patch_file in "$@"; do git -C "$target" apply "$patch_file"; done
   (cd "$target" && npm ci --ignore-scripts --no-audit --no-fund && npm run build)
   printf '%s\n' "$receipt" > "$target/.nearby-travel-release"
 }
@@ -120,7 +132,15 @@ if [[ ! -d "$amap" ]]; then
   build_server "$staging/foodnearby" https://github.com/FunEnn/FoodNearBy-MCP.git "$amap_revision" "$amap_receipt" "$amap_patch"
 fi
 if [[ ! -d "$dp" ]]; then
-  build_server "$staging/dianping" https://github.com/qianwj/dp-mcp.git "$dp_revision" "$dp_receipt" "$dp_patch"
+  build_server "$staging/dianping" https://github.com/qianwj/dp-mcp.git "$dp_revision" "$dp_receipt" "$dp_login_patch" "$dp_rating_patch"
+elif [[ "$installed_dp" == "$previous_dp_receipt" ]]; then
+  [[ "$(git -C "$dp" rev-parse HEAD)" == "$dp_revision" ]] || fail '大众点评的本机源码版本已更改。'
+  if ! git -C "$dp" apply --reverse --check "$dp_rating_patch" 2>/dev/null; then
+    git -C "$dp" apply "$dp_rating_patch" || fail '大众点评的本机代码与评分补丁冲突。'
+  fi
+  (cd "$dp" && npm run build)
+  printf '%s\n' "$dp_receipt" > "$staging/dp-receipt"
+  mv "$staging/dp-receipt" "$dp/.nearby-travel-release"
 fi
 if [[ -d "$staging/foodnearby" ]]; then mv "$staging/foodnearby" "$amap"; fi
 if [[ -d "$staging/dianping" ]]; then mv "$staging/dianping" "$dp"; fi
@@ -139,6 +159,9 @@ if [[ ! -d "$skill_dir" ]]; then
   mkdir "$staging/skill"
   cp "$skill_file" "$staging/skill/SKILL.md"
   mv "$staging/skill" "$skill_dir"
+elif [[ "$upgrade_skill" == true ]]; then
+  cp "$skill_file" "$staging/SKILL.md"
+  mv "$staging/SKILL.md" "$skill_dir/SKILL.md"
 fi
 
 printf '\n已安装 nearby-travel。首次使用请完成这两步，然后重开 Codex。\n'
