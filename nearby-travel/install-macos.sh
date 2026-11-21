@@ -58,7 +58,6 @@ dp_revision=7886cc2996ad207e69b5277d83b6d28a422140e7
 amap_receipt="$amap_revision $(git hash-object "$amap_patch")"
 previous_dp_receipt="$dp_revision $(git hash-object "$dp_login_patch")"
 dp_receipt="$previous_dp_receipt $(git hash-object "$dp_rating_patch")"
-previous_skill_hash=72ef028df668215eaf47acfa60823ef017c9a1fba240c157f02aa7f14db4265f
 
 check_mcp() {
   local name=$1 entry=$2 output args_value
@@ -107,9 +106,12 @@ if [[ -e "$skill_dir" || -L "$skill_dir" ]]; then
   [[ ! -L "$skill_dir" && ! -L "$skill_dir/SKILL.md" && -f "$skill_dir/SKILL.md" ]] ||
     fail "已有不同的 Skill 位于 ${skill_dir}。"
   if ! cmp -s "$skill_file" "$skill_dir/SKILL.md"; then
-    [[ "$(shasum -a 256 < "$skill_dir/SKILL.md")" == "$previous_skill_hash "* ]] ||
-      fail "已有不同的 Skill 位于 ${skill_dir}。"
-    upgrade_skill=true
+    installed_skill_hash=$(shasum -a 256 < "$skill_dir/SKILL.md")
+    case "${installed_skill_hash%% *}" in
+      72ef028df668215eaf47acfa60823ef017c9a1fba240c157f02aa7f14db4265f|bb31c37ac0e8e4c28ced4286f32698626fb00d2d2db1543bf9c75cd19bc7fc04)
+        upgrade_skill=true ;;
+      *) fail "已有不同的 Skill 位于 ${skill_dir}。";;
+    esac
   fi
 fi
 
