@@ -108,7 +108,7 @@ if [[ -e "$skill_dir" || -L "$skill_dir" ]]; then
   if ! cmp -s "$skill_file" "$skill_dir/SKILL.md"; then
     installed_skill_hash=$(shasum -a 256 < "$skill_dir/SKILL.md")
     case "${installed_skill_hash%% *}" in
-      72ef028df668215eaf47acfa60823ef017c9a1fba240c157f02aa7f14db4265f|bb31c37ac0e8e4c28ced4286f32698626fb00d2d2db1543bf9c75cd19bc7fc04|a0109ebf1684244f136a5565ab1679b9444574efc6d3552f49246556c1225893|c9c8ca812d18e7b9645375f9afa9f7dec2b80c5aeaf5eb7a3146a263e52d9626)
+      72ef028df668215eaf47acfa60823ef017c9a1fba240c157f02aa7f14db4265f|bb31c37ac0e8e4c28ced4286f32698626fb00d2d2db1543bf9c75cd19bc7fc04|a0109ebf1684244f136a5565ab1679b9444574efc6d3552f49246556c1225893|c9c8ca812d18e7b9645375f9afa9f7dec2b80c5aeaf5eb7a3146a263e52d9626|806694cbe9113d19c6254776ba7e0a856919f9cc24b5fdcf82cf986d6b1a37f7)
         upgrade_skill=true ;;
       *) fail "已有不同的 Skill 位于 ${skill_dir}。";;
     esac
