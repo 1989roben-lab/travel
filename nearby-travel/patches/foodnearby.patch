@@ -1,0 +1,244 @@
+diff --git a/src/index.ts b/src/index.ts
+index 06e4a0a..9aa3cb3 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -11,6 +11,7 @@ import {
+ import dotenv from 'dotenv';
+ import { LocationService } from './services/locationService.js';
+ import { MapPoiService } from './services/mapPoiService.js';
++import { AmapLocationService } from './services/amapLocationService.js';
+ 
+ dotenv.config();
+ 
+@@ -33,6 +34,7 @@ class FoodNearbyMCPServer {
+   private server: Server;
+   private locationService: LocationService;
+   private mapPoiService: MapPoiService;
++  private amapLocationService: AmapLocationService;
+ 
+   constructor() {
+     this.server = new Server(
+@@ -49,6 +51,7 @@ class FoodNearbyMCPServer {
+ 
+     this.locationService = new LocationService();
+     this.mapPoiService = new MapPoiService();
++    this.amapLocationService = new AmapLocationService();
+ 
+     this.setupToolHandlers();
+   }
+@@ -57,6 +60,35 @@ class FoodNearbyMCPServer {
+     this.server.setRequestHandler(ListToolsRequestSchema, async (): Promise<ListToolsResult> => {
+       return {
+         tools: [
++          {
++            name: 'search_nearby_places',
++            description: '按城市加地标、详细地址或坐标搜索高德地图周边地点，按直线距离排序。支持餐厅、酒店等。万豪旅享家旗下酒店可分别按品牌搜，品牌归属以官网为准。',
++            inputSchema: {
++              type: 'object',
++              properties: {
++                location: { type: 'string', description: '城市加地标、地址或纬度,经度，例如上海市静安寺' },
++                keyword: { type: 'string', description: '地点关键词，例如粤菜、万豪酒店、喜来登' },
++                radius: { type: 'integer', minimum: 1, maximum: 50000, default: DEFAULT_RADIUS, description: '搜索半径，单位米' },
++                category: { type: 'string', enum: ['restaurant', 'hotel', 'train_station'], description: '可选的地点类别' },
++              },
++              required: ['location', 'keyword'],
++            },
++            annotations: { readOnlyHint: true, openWorldHint: true },
++          },
++          {
++            name: 'route_to_place',
++            description: '估算中国大陆两点之间的步行或驾车路程和时间，地点可以是详细地址或高德坐标。',
++            inputSchema: {
++              type: 'object',
++              properties: {
++                origin: { type: 'string', description: '出发地点或纬度,经度' },
++                destination: { type: 'string', description: '目的地或纬度,经度' },
++                mode: { type: 'string', enum: ['walking', 'driving'] },
++              },
++              required: ['origin', 'destination', 'mode'],
++            },
++            annotations: { readOnlyHint: true, openWorldHint: true },
++          },
+           {
+             name: 'search_map_poi',
+             description: '通过高德地图API搜索附近的餐饮商家POI信息，专注于美食餐厅。提供详细的餐厅信息包括评分、价格、菜系等。',
+@@ -113,6 +145,10 @@ class FoodNearbyMCPServer {
+ 
+       try {
+         switch (name) {
++          case 'search_nearby_places':
++            return await this.handleNearbyPlaces(args ?? {});
++          case 'route_to_place':
++            return await this.handleRoute(args ?? {});
+           case 'search_map_poi':
+             return await this.handleSearchMapPoi(args as unknown as SearchMapPoiArgs);
+           default:
+@@ -121,6 +157,7 @@ class FoodNearbyMCPServer {
+       } catch (error) {
+         const errorMessage = error instanceof Error ? error.message : String(error);
+         return {
++          isError: true,
+           content: [
+             {
+               type: 'text',
+@@ -132,6 +169,72 @@ class FoodNearbyMCPServer {
+     });
+   }
+ 
++  private async handleNearbyPlaces(args: Record<string, unknown>): Promise<CallToolResult> {
++    const { location, keyword, radius = DEFAULT_RADIUS, category } = args;
++    if (typeof location !== 'string' || !location.trim() || typeof keyword !== 'string' || !keyword.trim()) {
++      throw new Error('请填写搜索地点和关键词');
++    }
++    if (typeof radius !== 'number' || !Number.isInteger(radius) || radius < 1 || radius > 50000) {
++      throw new Error('搜索半径须为 1 至 50000 米的整数');
++    }
++    if (category !== undefined && category !== 'restaurant' && category !== 'hotel' && category !== 'train_station') {
++      throw new Error('地点类别须为 restaurant、hotel 或 train_station');
++    }
++
++    const anchor = location.trim();
++    const center = await this.resolveAnchor(anchor);
++    const types = { restaurant: '050000', hotel: '100000', train_station: '150200' };
++    const type = category === undefined ? undefined : types[category];
++    const results = await this.amapLocationService.searchNearbyFood(center, radius, keyword.trim(), type);
++    const places = results.filter(place => place.distance <= radius).map(place => ({
++      id: place.id,
++      name: place.name,
++      address: Array.isArray(place.address) ? '' : place.address,
++      distance_m: place.distance,
++      coordinates: place.location,
++      type: place.type,
++      rating: place.rating || null,
++      ...(place.typecode?.startsWith('05') ? { average_spend: place.price_range } : {}),
++    }));
++    const data = { source: '高德地图', anchor, center, radius_m: radius, places };
++    return {
++      content: [{ type: 'text', text: JSON.stringify(data) }],
++      structuredContent: data,
++    };
++  }
++
++  private async resolveAnchor(anchor: string) {
++    // A failed lookup must never fall back to the default city.
++    const center = this.locationService.isCoordinateFormat(anchor)
++      ? this.locationService.parseCoordinate(anchor)
++      : await this.amapLocationService.geocodeAddress(anchor);
++    if (!Number.isFinite(center.lat) || !Number.isFinite(center.lng)
++        || Math.abs(center.lat) > 90 || Math.abs(center.lng) > 180) {
++      throw new Error('坐标格式须为纬度,经度');
++    }
++    return center;
++  }
++
++  private async handleRoute(args: Record<string, unknown>): Promise<CallToolResult> {
++    const { origin, destination, mode } = args;
++    if (typeof origin !== 'string' || !origin.trim() || typeof destination !== 'string' || !destination.trim()) {
++      throw new Error('请填写出发地和目的地');
++    }
++    if (mode !== 'walking' && mode !== 'driving') {
++      throw new Error('路线方式须为 walking 或 driving');
++    }
++    const [from, to] = await Promise.all([
++      this.resolveAnchor(origin.trim()),
++      this.resolveAnchor(destination.trim()),
++    ]);
++    const route = await this.amapLocationService.getRoute(from, to, mode);
++    const data = { source: '高德地图', mode, ...route };
++    return {
++      content: [{ type: 'text', text: JSON.stringify(data) }],
++      structuredContent: data,
++    };
++  }
++
+   private async handleSearchMapPoi(args: SearchMapPoiArgs): Promise<CallToolResult> {
+     const { 
+       location, 
+@@ -247,4 +350,4 @@ class FoodNearbyMCPServer {
+ }
+ 
+ const server = new FoodNearbyMCPServer();
+-server.run().catch(console.error);
+\ No newline at end of file
++server.run().catch(console.error);
+diff --git a/src/services/amapLocationService.ts b/src/services/amapLocationService.ts
+index 53cfa45..317c496 100644
+--- a/src/services/amapLocationService.ts
++++ b/src/services/amapLocationService.ts
+@@ -74,11 +74,14 @@ export class AmapLocationService {
+       key: this.amapApiKey,
+     };
+ 
+-    const response: AxiosResponse<AmapGeocodeResponse> = await axios.get(url, { params });
++    const response: AxiosResponse<AmapGeocodeResponse> = await axios.get(url, { params, timeout: 10000 });
+     
+     if (response.data.status === '1' && response.data.geocodes.length > 0) {
+-      const location = response.data.geocodes[0]?.location?.split(',') || ['0', '0'];
+-      return { lat: parseFloat(location[1] || '0'), lng: parseFloat(location[0] || '0') };
++      const [lng, lat] = response.data.geocodes[0]?.location?.split(',').map(Number) ?? [];
++      if (Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0)) {
++        return { lat: lat!, lng: lng! };
++      }
++      throw new Error('高德地图未返回有效坐标');
+     } else {
+       throw new Error(`高德地图API错误: ${response.data.info}`);
+     }
+@@ -115,6 +118,33 @@ export class AmapLocationService {
+     throw new Error(`高德地图IP定位API无法获取精确坐标: ${response.data.info}`);
+   }
+ 
++  public async getRoute(origin: Coordinates, destination: Coordinates, mode: 'walking' | 'driving') {
++    if (!this.amapApiKey) {
++      throw new Error('未配置高德地图API密钥');
++    }
++    const url = `https://restapi.amap.com/v3/direction/${mode}`;
++    const params = {
++      key: this.amapApiKey,
++      origin: `${origin.lng},${origin.lat}`,
++      destination: `${destination.lng},${destination.lat}`,
++    };
++    const { data } = await axios.get<{
++      status: string;
++      info?: string;
++      route?: { paths?: Array<{ distance: string; duration: string }> };
++    }>(url, { params, timeout: 10000 });
++    if (data.status !== '1') {
++      throw new Error(`高德地图路线查询失败: ${data.info ?? '未知错误'}`);
++    }
++    const firstPath = data.route?.paths?.[0];
++    const distance = Number(firstPath?.distance);
++    const duration = Number(firstPath?.duration);
++    if (!Number.isFinite(distance) || !Number.isFinite(duration) || distance < 0 || duration < 0) {
++      throw new Error('高德地图未返回可用路线');
++    }
++    return { distance_m: distance, duration_s: duration };
++  }
++
+   public async searchNearbyFood(
+     coordinates: Coordinates,
+     radius: number = 1000,
+@@ -134,18 +164,20 @@ export class AmapLocationService {
+       extensions: 'all',
+       page: 1,
+       offset: 20,
++      sortrule: 'distance',
+     };
+ 
+-    // keywords 和 types 二选一必填
+     if (keyword) {
+       params.keywords = keyword;
+-    } else if (types) {
++    }
++    if (types) {
+       params.types = types;
+-    } else {
++    }
++    if (!keyword && !types) {
+       params.keywords = '美食';
+     }
+ 
+-    const response: AxiosResponse<AmapNearbySearchResponse> = await axios.get(url, { params });
++    const response: AxiosResponse<AmapNearbySearchResponse> = await axios.get(url, { params, timeout: 10000 });
+     
+     if (response.data.status === '1' && response.data.pois) {
+       return response.data.pois.map(poi => {

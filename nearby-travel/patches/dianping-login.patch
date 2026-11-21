@@ -1,0 +1,15 @@
+diff --git a/src/browser.ts b/src/browser.ts
+index fbe8b17..9b550e8 100644
+--- a/src/browser.ts
++++ b/src/browser.ts
+@@ -63,7 +63,9 @@ function pageStatus(url: string, title: string, bodyText: string): SessionStatus
+     };
+   }
+ 
+-  if (url.includes("login.dianping.com") || url.includes("mlogin.dianping.com")) {
++  const { hostname, pathname } = new URL(url);
++  if (hostname === "login.dianping.com" || hostname === "mlogin.dianping.com"
++      || (hostname === "account.dianping.com" && pathname === "/pclogin")) {
+     return {
+       state: "login_required",
+       message: "大众点评会话尚未登录或已失效。请运行登录命令后重试。",
