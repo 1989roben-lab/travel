@@ -23,14 +23,14 @@
    ```
 
 2. 按脚本显示的命令打开本机 `.env`，在 `AMAP_API_KEY=` 后填自己的 [高德开放平台 Web 服务 Key](https://lbs.amap.com/)。保存后回到终端。
-3. 重开 Codex，输入「用 `$nearby-travel`，以上海静安寺为起点，查全市火车站、最近的 10 家万豪旅享家酒店，以及类似蓝蛙的餐厅，按步行距离列最近的 10 家。」
+3. 重开 Codex，输入「用 `$hjh-travel`，以上海静安寺为起点，查全市火车站、最近的 10 家万豪旅享家酒店，以及类似蓝蛙的餐厅，按步行距离列最近的 10 家。」
 
-安装脚本将固定版本的 [FoodNearBy-MCP](https://github.com/FunEnn/FoodNearBy-MCP) 下载到 Codex 用户目录的 `mcp-servers/nearby-travel/`，应用包内补丁，并注册 `nearby-amap`。补丁提供按地标搜索和路线查询。已安装且匹配时可重复运行。使用早期未修改版本的用户可用新版脚本升级 Skill。遇到同名但不兼容的配置时，脚本会显示冲突并退出。
+安装脚本将固定版本的 [FoodNearBy-MCP](https://github.com/FunEnn/FoodNearBy-MCP) 下载到 Codex 用户目录的 `mcp-servers/nearby-travel/`，应用包内补丁，并注册 `nearby-amap`。此 MCP 路径和高德 Key 文件保持原位，以便已有用户升级时保留授权。补丁提供按地标搜索和路线查询。已安装且匹配时可重复运行；安装脚本可把旧的 `nearby-travel` Skill 目录迁移为 `hjh-travel`。遇到同名但不兼容的配置时，脚本会显示冲突并退出。
 
 如工具未出现，在终端运行 `codex mcp list`，检查服务是否启用，再打开一个新会话。高德报错时请检查 Key 的类型和状态；Skill 也会用可访问的高德网页继续查询。
 
 ## Muse 网页版
 
-把完整的 `nearby-travel` 目录交给 [Muse](https://muse.ai/) 安装，以便一同提供本地铁路车站索引。详见 [Muse 网页版安装说明](MUSE-INSTALL.md)。
+把完整的 `hjh-travel` 目录交给 [Muse](https://muse.ai/) 安装，以便一同提供本地铁路车站索引。详见 [Muse 网页版安装说明](MUSE-INSTALL.md)。
 
 分享时发送原始 ZIP。每位用户在自己的机器上完成 Codex 配置。
